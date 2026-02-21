@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="AI CHAMBER">
+    <link rel="apple-touch-icon" href="icon-192.png">
+    <link rel="manifest" href="manifest.webmanifest">
+    <title>AI CHAMBER - ECHO</title>
+    <link rel="stylesheet" href="styles.css">
+    <!-- Three.js from CDN -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+</head>
+<body>
+    <div id="app" class="state-booting">
+        <canvas id="face-canvas"></canvas>
+        <video id="webcam" autoplay playsinline muted style="display:none;"></video>
+
+        <div id="ui-layer">
+            <header>
+                <div class="cam-indicator">
+                    <span class="dot"></span> CAM ACTIVE
+                </div>
+                <div class="status-badge" id="status-text">BOOTING ECHO...</div>
+            </header>
+
+            <main>
+                <div id="transcript-container" class="hidden">
+                    <div id="transcript-content"></div>
+                </div>
+                <div id="status-ring"></div>
+            </main>
+
+            <footer>
+                <button id="talk-btn" class="push-to-talk">
+                    <span class="btn-label">HOLD TO SPEAK</span>
+                    <div class="btn-glow"></div>
+                </button>
+                <div class="bottom-controls">
+                    <button id="toggle-transcript">LOGS</button>
+                    <button id="clear-memory">WIPE</button>
+                    <button id="toggle-perf">PERF: HIGH</button>
+                </div>
+            </footer>
+        </div>
+
+        <div id="boot-screen">
+            <div class="loader">
+                <div class="loader-bar"></div>
+                <div class="loader-text">INITIALIZING ECHO SYSTEM...</div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="app.js"></script>
+</body>
+</html>
