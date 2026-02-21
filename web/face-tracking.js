@@ -11,13 +11,50 @@ export class FaceTracking {
         this.lastDetectTime = 0;
         this.throttlingMs = 85; // ~11.7 FPS
 
-        this.smoothX = 0;
-        this.smoothY = 0;
+        this.smoothX = 0.5;
+        this.smoothY = 0.5;
         this.lerpFactor = 0.15;
 
         this.lastLogTime = 0;
 
+        // Debug Overlay
+        this.createDebugOverlay();
+
         this.init();
+    }
+
+    createDebugOverlay() {
+        this.debugOverlay = document.createElement('div');
+        this.debugOverlay.id = 'face-debug';
+        this.debugOverlay.style.position = 'fixed';
+        this.debugOverlay.style.top = '0';
+        this.debugOverlay.style.left = '0';
+        this.debugOverlay.style.width = '100%';
+        this.debugOverlay.style.height = '100%';
+        this.debugOverlay.style.pointerEvents = 'none';
+        this.debugOverlay.style.zIndex = '9999';
+
+        this.debugDot = document.createElement('div');
+        this.debugDot.style.width = '20px';
+        this.debugDot.style.height = '20px';
+        this.debugDot.style.borderRadius = '50%';
+        this.debugDot.style.backgroundColor = 'rgba(255, 0, 0, 0.5)';
+        this.debugDot.style.position = 'absolute';
+        this.debugDot.style.transform = 'translate(-50%, -50%)';
+        this.debugDot.style.display = 'none';
+
+        this.debugText = document.createElement('div');
+        this.debugText.style.position = 'absolute';
+        this.debugText.style.top = '10px';
+        this.debugText.style.left = '10px';
+        this.debugText.style.color = 'red';
+        this.debugText.style.fontFamily = 'monospace';
+        this.debugText.style.fontSize = '12px';
+        this.debugText.innerText = 'NO FACE';
+
+        this.debugOverlay.appendChild(this.debugDot);
+        this.debugOverlay.appendChild(this.debugText);
+        document.body.appendChild(this.debugOverlay);
     }
 
     async init() {
@@ -59,7 +96,6 @@ export class FaceTracking {
                 });
                 this.video.srcObject = stream;
 
-                // Ensure video is playing
                 await new Promise((resolve) => {
                     this.video.onloadedmetadata = () => {
                         this.video.play().then(resolve);
@@ -74,14 +110,9 @@ export class FaceTracking {
         }
     }
 
-    setThrottling(fps) {
-        this.throttlingMs = 1000 / fps;
-    }
-
     predictLoop() {
         const now = performance.now();
 
-        // 1. Throttle detection
         if (this.video.readyState >= 2 && (now - this.lastDetectTime) >= this.throttlingMs) {
             this.lastDetectTime = now;
 
@@ -89,34 +120,30 @@ export class FaceTracking {
 
             if (result.faceLandmarks && result.faceLandmarks.length > 0) {
                 const landmarks = result.faceLandmarks[0];
-                // Use nose tip (index 1)
                 const nose = landmarks[1];
 
-                // Map to range [-1, 1] and invert X for mirror
-                const targetX = -(nose.x - 0.5) * 2;
-                const targetY = -(nose.y - 0.5) * 2;
+                // Normalized x, y [0, 1]
+                // Invert X because it's a mirror
+                const x = 1.0 - nose.x;
+                const y = nose.y;
 
-                // 2. Exponential smoothing
-                this.smoothX += (targetX - this.smoothX) * this.lerpFactor;
-                this.smoothY += (targetY - this.smoothY) * this.lerpFactor;
+                window.ECHO_FACE = { x, y, hasFace: true, t: Date.now() };
 
-                this.scene.updateLookAt(this.smoothX, this.smoothY);
+                // Update Debug Overlay
+                this.debugDot.style.display = 'block';
+                this.debugDot.style.left = `${x * window.innerWidth}px`;
+                this.debugDot.style.top = `${y * window.innerHeight}px`;
+                this.debugText.innerText = `FACE: ${x.toFixed(2)}, ${y.toFixed(2)}`;
 
-                // 3. Emit face data
-                window.ECHO_FACE = { x: this.smoothX, y: this.smoothY, hasFace: true };
-
-                // 4. Log once per second
                 if (now - this.lastLogTime > 1000) {
-                    console.log("ECHO: Face detected");
+                    console.log(`ECHO: Face detected - x: ${x.toFixed(2)}, y: ${y.toFixed(2)}`);
                     this.lastLogTime = now;
                 }
             } else {
-                // Face lost
-                this.smoothX *= 0.9; // Drift back to center
-                this.smoothY *= 0.9;
-                this.scene.updateLookAt(this.smoothX, this.smoothY);
+                window.ECHO_FACE = { hasFace: false, t: Date.now() };
 
-                window.ECHO_FACE = { hasFace: false };
+                this.debugDot.style.display = 'none';
+                this.debugText.innerText = 'NO FACE';
 
                 if (now - this.lastLogTime > 1000) {
                     console.log("ECHO: No face");

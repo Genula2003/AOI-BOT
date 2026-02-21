@@ -22,12 +22,13 @@ export class FaceScene {
         this.initLights();
         this.buildFace();
 
-        this.lookTarget = new THREE.Vector3(0, 0, 5);
-        this.smoothTarget = new THREE.Vector3(0, 0, 5);
+        this.lookTarget = new THREE.Vector3(0, 0, 2.5);
+        this.smoothTarget = new THREE.Vector3(0, 0, 2.5);
 
         this.mood = 'CALM';
         this.blinkTimer = 0;
         this.saccadeTimer = 0;
+        this.saccadeOffset = new THREE.Vector3(0, 0, 0);
 
         window.addEventListener('resize', () => this.onResize());
         this.animate();
@@ -90,8 +91,7 @@ export class FaceScene {
     }
 
     updateLookAt(x, y) {
-        // x, y expected in range [-1, 1]
-        this.lookTarget.set(x * 3, y * 3, 5);
+        // Deprecated: now uses window.ECHO_FACE in animate()
     }
 
     setMoodFromState(state) {
@@ -104,7 +104,6 @@ export class FaceScene {
     }
 
     setMood(mood) {
-        // Moods: curious|calm|suspicious|proud|tired
         let color = 0xa855f7;
         switch(mood) {
             case 'curious': color = 0x3b82f6; break;
@@ -124,7 +123,6 @@ export class FaceScene {
     }
 
     animateMouth(amplitude) {
-        // amplitude 0-255
         const scale = 1 + (amplitude / 255) * 5;
         this.mouth.scale.y = scale;
     }
@@ -134,44 +132,59 @@ export class FaceScene {
 
         const time = performance.now() * 0.001;
 
-        // Idle breathing / sway
+        // 1. Handle Face Following / Search Mode
+        if (window.ECHO_FACE && window.ECHO_FACE.hasFace) {
+            const { x, y } = window.ECHO_FACE;
+            // Map normalized [0, 1] to 3D space.
+            // x: 0.5 is center, so (x-0.5)*4 gives range [-2, 2]
+            this.lookTarget.set((x - 0.5) * 4, -(y - 0.5) * 4, 2.5);
+        } else {
+            // Search Mode: slow horizontal scan
+            this.lookTarget.x = Math.sin(time * 0.5) * 2;
+            this.lookTarget.y = Math.sin(time * 0.2) * 0.5;
+            this.lookTarget.z = 2.5;
+        }
+
+        // 2. Micro-saccades (tiny eye flicks)
+        this.saccadeTimer -= 0.016;
+        if (this.saccadeTimer <= 0) {
+            this.saccadeOffset.set(
+                (Math.random() - 0.5) * 0.2,
+                (Math.random() - 0.5) * 0.2,
+                0
+            );
+            this.saccadeTimer = 0.5 + Math.random() * 1.5;
+        }
+
+        // 3. Smoothing
+        const finalTarget = this.lookTarget.clone().add(this.saccadeOffset);
+        this.smoothTarget.lerp(finalTarget, 0.1);
+
+        // 4. Eyes LookAt
+        // We use world position for lookAt
+        const worldTarget = this.smoothTarget.clone();
+        this.eyeL.lookAt(worldTarget);
+        this.eyeR.lookAt(worldTarget);
+
+        // 5. Head follows slightly (15%)
+        this.head.rotation.y = (this.smoothTarget.x / 4) * 0.15;
+        this.head.rotation.x = -(this.smoothTarget.y / 4) * 0.1;
+
+        // 6. Idle breathing / sway
         this.faceGroup.position.y = Math.sin(time * 0.5) * 0.1;
         this.faceGroup.rotation.z = Math.sin(time * 0.3) * 0.02;
 
-        // Smooth target tracking
-        this.smoothTarget.lerp(this.lookTarget, 0.1);
-
-        // Eyes look at smooth target
-        this.eyeL.lookAt(this.smoothTarget);
-        this.eyeR.lookAt(this.smoothTarget);
-
-        // Head follows slightly
-        this.head.rotation.y = (this.smoothTarget.x / 5) * 0.2;
-        this.head.rotation.x = -(this.smoothTarget.y / 5) * 0.1;
-
-        // Random Blinking
+        // 7. Random Blinking
         this.blinkTimer -= 0.016;
         if (this.blinkTimer <= 0) {
             this.blink();
             this.blinkTimer = 2 + Math.random() * 5;
         }
 
-        // Micro-saccades
-        this.saccadeTimer -= 0.016;
-        if (this.saccadeTimer <= 0) {
-            this.lookTarget.x += (Math.random() - 0.5) * 0.2;
-            this.lookTarget.y += (Math.random() - 0.5) * 0.2;
-            this.saccadeTimer = 0.5 + Math.random() * 1.5;
-        }
-
         this.renderer.render(this.scene, this.camera);
     }
 
     blink() {
-        const originalScale = this.eyeL.scale.y;
-        const blinkTween = { s: originalScale };
-
-        // Simple manual tweening for blink
         let start = performance.now();
         const duration = 150;
 
