@@ -8,16 +8,20 @@ export class FaceTracking {
         this.scene = scene;
         this.video = document.getElementById('webcam');
         this.faceLandmarker = null;
-        this.lastVideoTime = -1;
-        this.throttlingMs = 80; // ~12 FPS
-        this.lastProcessedTime = 0;
+        this.lastDetectTime = 0;
+        this.throttlingMs = 85; // ~11.7 FPS
+
+        this.smoothX = 0;
+        this.smoothY = 0;
+        this.lerpFactor = 0.15;
+
+        this.lastLogTime = 0;
 
         this.init();
     }
 
     async init() {
         try {
-            // Import MediaPipe from CDN
             const vision = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/vision_bundle.mjs');
             const { FaceLandmarker, FilesetResolver } = vision;
 
@@ -36,7 +40,7 @@ export class FaceTracking {
             });
 
             console.log("ECHO: Face Landmarker loaded.");
-            this.startCamera();
+            await this.startCamera();
         } catch (err) {
             console.error("ECHO: Face Tracking init failed:", err);
         }
@@ -46,11 +50,24 @@ export class FaceTracking {
         if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: "user", width: 640, height: 480 },
+                    video: {
+                        facingMode: "user",
+                        width: { ideal: 640 },
+                        height: { ideal: 480 }
+                    },
                     audio: false
                 });
                 this.video.srcObject = stream;
-                this.video.addEventListener('loadeddata', () => this.predictLoop());
+
+                // Ensure video is playing
+                await new Promise((resolve) => {
+                    this.video.onloadedmetadata = () => {
+                        this.video.play().then(resolve);
+                    };
+                });
+
+                console.log("ECHO: Camera started.");
+                this.predictLoop();
             } catch (err) {
                 console.error("Camera access denied:", err);
             }
@@ -64,25 +81,47 @@ export class FaceTracking {
     predictLoop() {
         const now = performance.now();
 
-        if (this.video.currentTime !== this.lastVideoTime && (now - this.lastProcessedTime) >= this.throttlingMs) {
-            this.lastVideoTime = this.video.currentTime;
-            this.lastProcessedTime = now;
+        // 1. Throttle detection
+        if (this.video.readyState >= 2 && (now - this.lastDetectTime) >= this.throttlingMs) {
+            this.lastDetectTime = now;
 
             const result = this.faceLandmarker.detectForVideo(this.video, now);
 
             if (result.faceLandmarks && result.faceLandmarks.length > 0) {
                 const landmarks = result.faceLandmarks[0];
-                // Use nose tip (index 1) for center estimation
+                // Use nose tip (index 1)
                 const nose = landmarks[1];
 
-                // Map to range [-1, 1]
-                const x = (nose.x - 0.5) * 2;
-                const y = -(nose.y - 0.5) * 2;
+                // Map to range [-1, 1] and invert X for mirror
+                const targetX = -(nose.x - 0.5) * 2;
+                const targetY = -(nose.y - 0.5) * 2;
 
-                this.scene.updateLookAt(-x, y); // Invert X for mirror effect
+                // 2. Exponential smoothing
+                this.smoothX += (targetX - this.smoothX) * this.lerpFactor;
+                this.smoothY += (targetY - this.smoothY) * this.lerpFactor;
+
+                this.scene.updateLookAt(this.smoothX, this.smoothY);
+
+                // 3. Emit face data
+                window.ECHO_FACE = { x: this.smoothX, y: this.smoothY, hasFace: true };
+
+                // 4. Log once per second
+                if (now - this.lastLogTime > 1000) {
+                    console.log("ECHO: Face detected");
+                    this.lastLogTime = now;
+                }
             } else {
-                // Face lost - return to neutral slowly
-                this.scene.updateLookAt(0, 0);
+                // Face lost
+                this.smoothX *= 0.9; // Drift back to center
+                this.smoothY *= 0.9;
+                this.scene.updateLookAt(this.smoothX, this.smoothY);
+
+                window.ECHO_FACE = { hasFace: false };
+
+                if (now - this.lastLogTime > 1000) {
+                    console.log("ECHO: No face");
+                    this.lastLogTime = now;
+                }
             }
         }
 

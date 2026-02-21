@@ -17,6 +17,20 @@ export default {
             return new Response(null, { headers: corsHeaders });
         }
 
+        // 1. Simple Rate Limiting (per IP)
+        const clientIP = request.headers.get("CF-Connecting-IP") || "unknown";
+        if (env.ECHO_KV) {
+            const rateKey = `rate_${clientIP}`;
+            const count = parseInt(await env.ECHO_KV.get(rateKey) || "0");
+            if (count > 50) { // 50 requests per hour limit
+                return new Response(JSON.stringify({ error: "Rate limit exceeded" }), {
+                    status: 429,
+                    headers: { ...corsHeaders, "Content-Type": "application/json" }
+                });
+            }
+            await env.ECHO_KV.put(rateKey, (count + 1).toString(), { expirationTtl: 3600 });
+        }
+
         try {
             if (url.pathname === "/stt" && request.method === "POST") {
                 return await handleSTT(request, env, corsHeaders);
@@ -59,26 +73,31 @@ async function handleSTT(request, env, corsHeaders) {
 async function handleChat(request, env, corsHeaders) {
     const { text, sessionId } = await request.json();
 
-    // 1. Get Memory from KV
+    // 1. Get Memory and Profile from KV
     let memory = [];
+    let profile = "No existing profile.";
     if (env.ECHO_KV) {
-        const stored = await env.ECHO_KV.get(`session_${sessionId}`);
-        if (stored) memory = JSON.parse(stored);
+        const storedMem = await env.ECHO_KV.get(`session_${sessionId}`);
+        if (storedMem) memory = JSON.parse(storedMem);
+
+        const storedProfile = await env.ECHO_KV.get(`profile_${sessionId}`);
+        if (storedProfile) profile = storedProfile;
     }
 
     // 2. Prepare Messages
-    const systemPrompt = `You are ECHO, a calm, observant, slightly cryptic sci-fi AI living inside an iPhone.
+    const systemPrompt = `You are ECHO, a calm, observant, slightly cryptic sci-fi AI.
     Personality: Premium, cinematic, not goofy. Use short lines.
+    User Profile Summary: ${profile}
     Current Date: ${new Date().toUTCString()}.
     Respond in JSON format: { "text": "your response", "mood": "curious|calm|suspicious|proud|tired" }`;
 
     const messages = [
         { role: "system", content: systemPrompt },
-        ...memory,
+        ...memory.slice(-10), // Last 10 interactions for immediate context
         { role: "user", content: text }
     ];
 
-    // 3. Call OpenAI
+    // 3. Call OpenAI for Chat
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: {
@@ -93,16 +112,38 @@ async function handleChat(request, env, corsHeaders) {
     });
 
     const data = await response.json();
+    if (!data.choices) throw new Error("OpenAI error: " + JSON.stringify(data));
     const result = JSON.parse(data.choices[0].message.content);
 
-    // 4. Update Memory
+    // 4. Update Memory and Summarize Profile every 5 messages
     memory.push({ role: "user", content: text });
     memory.push({ role: "assistant", content: result.text });
-    // Keep last 10 interactions
-    if (memory.length > 10) memory = memory.slice(-10);
 
     if (env.ECHO_KV) {
-        await env.ECHO_KV.put(`session_${sessionId}`, JSON.stringify(memory));
+        await env.ECHO_KV.put(`session_${sessionId}`, JSON.stringify(memory), { expirationTtl: 86400 });
+
+        if (memory.length % 10 === 0) {
+            // Trigger summarization
+            const summaryPrompt = `Based on these interactions, provide a one-sentence summary of the user's profile and preferences for AI memory.
+            Current Interactions: ${JSON.stringify(memory.slice(-10))}`;
+
+            const sumRes = await fetch("https://api.openai.com/v1/chat/completions", {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${env.OPENAI_API_KEY}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    model: "gpt-3.5-turbo",
+                    messages: [{ role: "system", content: summaryPrompt }]
+                })
+            });
+            const sumData = await sumRes.json();
+            if (sumData.choices) {
+                const newProfile = sumData.choices[0].message.content;
+                await env.ECHO_KV.put(`profile_${sessionId}`, newProfile, { expirationTtl: 604800 });
+            }
+        }
     }
 
     return new Response(JSON.stringify(result), {
